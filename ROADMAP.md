@@ -5,6 +5,6 @@
 - Ajouter une sauvegarde de projet locale.
 - Organiser une collecte autorisée avec des acteurs locaux du tri.
 - Étendre les vérifications d’accessibilité et de compatibilité navigateur.
-- Ajouter la détection d’objets uniquement avec un outil de boîtes vérifiables.
+- Évaluer la détection multi-objets et les rectangles proposés par Gemma sur des scènes réelles annotées indépendamment ; l’éditeur et les exports YOLO/COCO sont disponibles depuis la version 1.1.
 
 Ces pistes ne constituent pas des performances ou une adoption déjà acquises.

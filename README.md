@@ -1,32 +1,34 @@
 # LushiData ✳
 
-**De la vidéo aux données utiles.** Un prototype pour Hack Day 2026 à Lubumbashi : transformer une vidéo ou un flux webcam en dataset de **classification d’images**, pré-annoté par **Gemma 4 hébergé**, puis vérifié humainement.
+**De la vidéo aux données utiles.** LushiData 1.1 transforme des vidéos ou un flux webcam en datasets de **détection multi-objets** ou de **classification**, pré-annotés par **Gemma 4 hébergé**, puis vérifiés humainement.
 
-> Gemma propose. Vous vérifiez. Chaque dataset conserve ses preuves et ses limites.
+> Gemma propose. Vous vérifiez. Chaque dataset conserve ses sources, ses corrections et ses limites.
 
 ![Interface LushiData](docs/preview.png)
 
-## Le problème
+## Deux modes
 
-Préparer les données précède tout entraînement de vision. Extraire toutes les images d’une vidéo crée des doublons ; répartir des images voisines entre entraînement et validation donne une évaluation trompeuse. LushiData organise la collecte, le contrôle, l’annotation et la revue. Le cas de démonstration est le tri des déchets ; l’impact auprès d’utilisateurs locaux reste à valider.
+- **Plusieurs objets par image — rectangles** (par défaut) : Gemma propose une catégorie et un rectangle pour chaque objet visible, y compris plusieurs instances d’une même catégorie. L’éditeur permet de déplacer, redimensionner, supprimer et dessiner des rectangles. Exports **YOLO, COCO, JSONL et CSV**.
+- **Une catégorie pour l’image entière** : classification de l’objet ou du matériau principal. Export ImageFolder, JSONL et CSV.
 
-## Fonctionnalités
+Le mode et les catégories sont choisis avant la collecte puis verrouillés pour ce dataset. Gemma reste **gemma-4-26b-a4b-it**, appelé en ligne via la Gemini API ; les poids ne sont pas installés localement.
 
-- Vidéos lisibles par le navigateur : MP4/WebM/MOV selon les codecs, 50 Mo par fichier, six sources et 48 images maximum.
-- Capture webcam pendant dix secondes, sans microphone.
-- Extraction JPEG locale ; netteté par variance du Laplacien et filtre d’exposition.
-- Images similaires détectées par dHash 64 bits, distance de Hamming ≤ 4. Exclusions réversibles et documentées.
-- Annotation réelle par **`gemma-4-26b-a4b-it`** via l’API Google. Aucun téléchargement des poids ni remplacement silencieux de modèle.
-- Catégories configurables, réponse JSON vérifiée côté serveur et ambiguïtés signalées.
-- Correction et validation **image par image** ; aucune validation automatique.
-- Parcours guidé, boutons de taille modérée adaptés au tactile, erreurs de catégorie visibles et action **Valider et suivante** pour enchaîner la revue.
-- ZIP avec arborescence ImageFolder, CSV/JSONL, sources, prompts exacts et SHA-256.
-- Séparation par vidéo source ; les sources reliées par des images proches restent dans la même partition.
-- Passeport : classes, sources, décisions, temps API, acceptation des propositions et limites.
+## Parcours
 
-## Démarrage
+1. Choisir le mode et les catégories.
+2. Importer une vidéo autorisée (50 Mo/fichier) ou capturer dix secondes de webcam, sans microphone. La vidéo est décodée dans le navigateur.
+3. Inspecter les exclusions de flou, exposition et similarité (dHash). Elles sont réversibles et documentées.
+4. Autoriser l’envoi des JPEG sélectionnés à Google et lancer Gemma.
+5. Vérifier chaque scène. En détection, corriger les catégories et rectangles, ajouter les objets manquants et supprimer les mauvaises propositions. Une catégorie indéterminée empêche la validation.
+6. Valider puis exporter les images revues avec leur passeport.
 
-Node.js **22.15+ ou 24 LTS**. Aucun paquet tiers nécessaire.
+Une image sans objet exige une confirmation explicite. Modifier une scène déjà validée la remet en attente. Aucune proposition de modèle n’est validée automatiquement.
+
+Le prototype limite la collecte à six sources, 16 images par vidéo et 48 images au total. En détection, les requêtes traitent une image à la fois ; Gemma propose au maximum 20 objets par image et l’éditeur en autorise 50. Les scènes encombrées peuvent rester incomplètes : elles nécessitent une vérification humaine.
+
+## Installation
+
+Node.js 22.15+ ou 24 LTS. Aucun paquet tiers nécessaire.
 
 ```sh
 git clone https://github.com/SiegK18/LushiData.git
@@ -45,85 +47,70 @@ PORT=4317
 npm run dev
 ```
 
-Ouvrir **http://127.0.0.1:4317**. `.env` est ignoré par Git. La clé reste côté serveur ; il contacte Google avec l’en-tête `x-goog-api-key`.
+Ouvrir **http://127.0.0.1:4317**. La clé reste côté serveur ; `.env` est ignoré par Git.
 
-## Démo en deux minutes
-
-1. **Essayer un exemple** : trois sources d’illustrations synthétiques, des variantes, un doublon intentionnel et une image uniforme. Ce ne sont pas des images de terrain et aucune annotation Gemma n’est préfabriquée.
-2. Autoriser explicitement l’envoi des images et cliquer **Annoter avec Gemma**.
-3. Inspecter, corriger au besoin et valider les images. Un cas indéterminé exige une catégorie finale.
-4. Lire le passeport et télécharger le ZIP.
-5. Pour une collecte réelle, recommencer avec plusieurs vidéos autorisées de scènes distinctes.
-
-Sans accès à Google, collecte, filtres, annotation manuelle et export restent utilisables. L’application affiche l’échec réel de l’API et ne simule pas Gemma.
-
-Les interruptions réseau et erreurs temporaires Google (408, 429, 500, 502, 503, 504) déclenchent jusqu’à trois tentatives avec attente progressive, dans un budget de 55 secondes. Une erreur d’accès n’est pas répétée et un long délai de quota est respecté. Les réponses indiquent le code Google, le nombre de tentatives et une référence de diagnostic sans révéler la clé. En cas d’échec, relancer l’annotation sans recharger l’onglet conserve les images et les propositions déjà reçues.
-
-## Export
+## Export de détection
 
 ```text
 dataset.zip
-├── train/<classe>/*.jpg
-├── val/<classe>/*.jpg             # si sources indépendantes suffisantes
-├── test/<classe>/*.jpg
-├── annotations.jsonl             # proposition, qualité, décision humaine
-├── annotations.csv
-├── classes.json                  # identifiants explicites et dossiers
-├── sources.json
-├── quality_report.json
-├── dataset_card.md
-├── rejected_manifest.json        # métadonnées, pas les pixels exclus
-├── annotation_prompt.txt         # consigne modèle
-├── annotation_prompts.json       # consignes réellement envoyées + SHA-256
+├── images/train/ · val/ · test/*.jpg
+├── labels/train/ · val/ · test/*.txt
+├── data.yaml
+├── coco/train.json · val.json · test.json
+├── annotations.jsonl · annotations.csv
+├── classes.json · sources.json
+├── quality_report.json · dataset_card.md
+├── rejected_manifest.json
+├── annotation_prompt.txt · annotation_prompts.json
 └── checksums.sha256
 ```
 
-Les empreintes d’images portent sur les octets JPEG exacts. L’empreinte webcam porte sur la concaténation des empreintes des captures ; celle d’une illustration identifie sa recette. `checksum_kind` explicite ces distinctions.
+- **YOLO** : chaque ligne contient `class_id x_center y_center width height`, coordonnées normalisées entre 0 et 1. Les indices commencent à 0 et sont définis dans `data.yaml`.
+- **COCO** : catégories à partir de 1, rectangles `[x, y, largeur, hauteur]` en pixels. Les `file_name` sont relatifs à la racine du ZIP.
+- **JSONL** : une ligne par image, avec tous ses objets, la proposition originale, la décision humaine et la provenance. Les rectangles `box_2d` sont `[ymin, xmin, ymax, xmax]`, normalisés sur 0..1000.
+- Une image négative confirmée possède un fichier YOLO vide et aucune annotation COCO.
+- Seules les scènes explicitement validées, aux catégories et rectangles valides, sont exportées.
 
-Seules les images validées avec une catégorie autorisée sont exportées. Vérifier les indices de `classes.json` car certains chargeurs ImageFolder trient les dossiers alphabétiquement. Il s’agit de classification, pas de détection d’objets : aucune boîte englobante.
+En classification, les images sont rangées dans `train/<classe>/*.jpg`, `val/<classe>/*.jpg` et `test/<classe>/*.jpg`. Vérifier les indices de `classes.json` : certains chargeurs ImageFolder trient les dossiers alphabétiquement.
 
-## Séparation des données
+## Provenance et séparation
 
-Un graphe relie les sources dont les images validées ont le même SHA-256 ou un dHash distant d’au plus quatre bits. Une composante connexe reste dans une seule partition. Un groupe donne uniquement `train` ; deux donnent `train` et `val` ; à partir de trois, des groupes sont réservés à `val` et `test`.
+L’export contient les sources, les empreintes SHA-256, les consignes exactes envoyées à Gemma, les propositions originales et les corrections. Les données exclues restent documentées sans leurs pixels.
 
-Cette méthode réduit une fuite évidente entre images voisines. Elle ne garantit ni indépendance sémantique parfaite, ni ratio 70/15/15, ni équilibre. Le rapport signale les classes absentes et partitions insuffisantes.
+Les vidéos entières restent dans une partition. Un graphe relie aussi les sources dont les images validées sont identiques ou très proches par dHash. Chaque composante connexe reste ensemble. Un seul groupe donne uniquement train ; deux donnent train/val ; à partir de trois, des groupes sont réservés à val et test.
 
-## Mesures et limites
+Cette stratégie réduit les fuites entre images voisines ; elle ne garantit ni indépendance sémantique parfaite, ni équilibre, ni ratio fixe. Les partitions ou catégories insuffisantes sont signalées.
 
-- Images retenues, filtres, corrections, validations, requêtes et temps API sont réels. L’acceptation humaine d’une proposition **n’est pas une précision scientifique**.
-- Pour mesurer le gain de temps, comparer le même échantillon annoté manuellement et avec assistance. Aucun gain n’est prérempli.
-- Les vidéos et décisions restent en mémoire dans l’onglet. **Exporter avant fermeture ou rechargement.** Pas de sauvegarde durable.
-- Seuls les JPEG sélectionnés sont transmis à Google après action explicite. Aucun stockage applicatif serveur ; les politiques de Google restent applicables.
-- Utiliser des images autorisées. La licence du code n’accorde aucun droit sur les vidéos.
-- L’exemple synthétique montre le parcours, pas la qualité d’un modèle sur des déchets réels.
-- Les filtres et annotations peuvent être erronés. Aucun dataset parfait, performance d’entraînement ou représentativité locale n’est promis.
-- Le proxy doit rester privé ou authentifié avant exposition sur Internet. Le serveur local écoute `127.0.0.1`. Sites protège l’instance hébergée par son contrôle d’accès.
+## Démonstration et limites
+
+**Essayer un exemple** charge des illustrations synthétiques. En détection, plusieurs objets apparaissent dans chaque scène. Les annotations ne sont pas préfabriquées : le bouton Gemma réalise un appel réel. L’exemple montre le parcours ; ce n’est pas un benchmark de terrain.
+
+Le cas d’usage initial est la préparation de données de tri des déchets. Le gain de temps, la précision, la représentativité locale et l’adoption auprès d’utilisateurs restent à évaluer. L’acceptation d’une proposition par un humain n’est pas une précision scientifique.
+
+Gemma peut manquer des objets, confondre les matériaux ou proposer des rectangles imprécis. La détection porte sur des images échantillonnées ; aucun suivi d’objets entre images ni analyse vidéo en temps réel n’est promis. Les sorties du modèle restent des propositions.
+
+## Fiabilité et confidentialité
+
+Les erreurs réseau et temporaires de Google déclenchent jusqu’à trois tentatives avec attente progressive, dans un budget de 55 secondes. Le nombre de tentatives et le code d’erreur sont conservés sans exposer la clé. Relancer l’annotation conserve les propositions déjà reçues ; aucun échec n’est remplacé par une réponse inventée.
+
+Les vidéos et décisions restent en mémoire dans l’onglet : **exporter avant fermeture ou rechargement**. Aucun stockage applicatif durable serveur. Les seuls pixels transmis à Google sont les JPEG sélectionnés après action explicite ; les politiques de Google restent applicables.
+
+Le serveur local écoute seulement 127.0.0.1. Le proxy doit rester privé ou authentifié avant exposition publique. Les données importées conservent leurs propres droits ; la licence du code n’accorde aucun droit sur les vidéos.
 
 ## Architecture et vérification
 
-```text
-Navigateur : vidéo/webcam → Canvas → filtres → JPEG sélectionnés
-    → serveur /api/annotate → Google Gemma 4
-    ← JSON vérifié et provenance ←
-    → revue humaine → séparation par source → ZIP + passeport
-```
+Navigateur : vidéo/webcam → Canvas → filtres → JPEG → proxy → Gemma 4 → propositions → éditeur humain → partitions par source → ZIP.
 
-`src/core.js` : qualité, partitions, rapport et ZIP. `src/server.js` : validation, proxy et erreurs masquées. `src/app.js` : interface. `scripts/build.mjs` : interface et Worker ESM autonomes. `scripts/dev.mjs` : même Worker en local.
+`src/core.js` contient formats, contrôles et partitions ; `src/server.js` le proxy et la validation des réponses ; `src/detection-editor.js` l’éditeur de rectangles ; `src/app.js` le parcours. Le build produit un Worker ESM autonome.
 
 ```sh
 npm run check
 ```
 
-Syntaxe, tests ciblés, build et artefact. Les tests API utilisent des réponses contrôlées et ne remplacent pas un appel réel.
-
-## Contribuer
-
-Voir [CONTRIBUTING.md](CONTRIBUTING.md), [ROADMAP.md](ROADMAP.md) et le [pitch](docs/PITCH.md). Les neuf critères officiels de la grille locale n’ont pas été communiqués ; aucune conformité exhaustive ou note de jury n’est affirmée.
-
-Les [vérifications réalisées](docs/VALIDATION.md) distinguent tests automatisés, parcours navigateur, appel réel à Gemma et limites d’évaluation.
+Les [vérifications](docs/VALIDATION.md) distinguent tests automatiques, parcours navigateur et appels réels. Voir aussi le [pitch](docs/PITCH.md), la [feuille de route](ROADMAP.md) et [CONTRIBUTING.md](CONTRIBUTING.md). Les neuf critères officiels locaux n’ont pas été fournis ; aucune note de jury n’est affirmée.
 
 Code : [MIT](LICENSE). Illustrations procédurales : CC0-1.0. Données importées : droits propres.
 
-[Documentation Google Gemma hébergé](https://ai.google.dev/gemma/docs/core/gemma_on_gemini_api) · [Images via la Gemini API](https://ai.google.dev/gemini-api/docs/image-understanding)
+[Gemma : compréhension d’images et détection](https://ai.google.dev/gemma/docs/capabilities/vision/image) · [Gemma hébergé via la Gemini API](https://ai.google.dev/gemma/docs/core/gemma_on_gemini_api)
 
 **Hack Day 2026 · Lubumbashi**

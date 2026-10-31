@@ -1,9 +1,10 @@
-import { VERSION, MODEL, DEFAULT_CLASSES, UNKNOWN, PROMPT_VERSION, LIMIT, enc, sha256, safeSlug, imageMetrics, classifyQuality, datasetReport, annotationRecord, csvCell, makeZip, makeAnnotationPrompt } from './core.js';
+import { VERSION, MODEL, DEFAULT_CLASSES, UNKNOWN, PROMPT_VERSION, LIMIT, TASK_CLASSIFICATION, TASK_DETECTION, isDetection, isExportable, detectionExport, promptVersion, enc, sha256, safeSlug, imageMetrics, classifyQuality, datasetReport, annotationRecord, csvCell, makeZip, makeAnnotationPrompt } from './core.js';
+import { detectionThumbnail, openDetectionEditor } from './detection-editor.js';
 const $ = id => document.getElementById(id);
 const esc = value => String(value ?? '').replace(/[&<>"']/g, c => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[c]));
 const fmt = n => new Intl.NumberFormat('fr-FR', { maximumFractionDigits: 1 }).format(n);
 const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
-const fresh = () => ({ name: 'Lushi · Tri des déchets', classes: [...DEFAULT_CLASSES], interval: 3, threshold: 35, frames: [], sources: [], requests: 0, gemmaMs: 0, reviewMs: 0, license: '' });
+const fresh = () => ({ name: 'Lushi · Tri des déchets', task:TASK_DETECTION, classes: [...DEFAULT_CLASSES], interval: 3, threshold: 35, frames: [], sources: [], requests: 0, gemmaMs: 0, reviewMs: 0, license: '' });
 let state = fresh(), busy = false, currentView = 'collect', filter = 'all', activeFrame = null, reviewOpened = 0, cameraStream = null, cameraCapturing = false, toastTimer;
 function toast(text, error = false) { $('toast').textContent = text; $('toast').className = 'toast' + (error ? ' error' : ''); $('toast').hidden = false; clearTimeout(toastTimer); toastTimer = setTimeout(() => $('toast').hidden = true, error ? 9000 : 5000); }
 function setBusy(value) {
@@ -47,9 +48,12 @@ function renderMetrics() {
   $('exportBtn').disabled = busy || !approved;
   for (const s of ['all', 'pending', 'approved', 'filtered', 'rejected']) $('count' + s[0].toUpperCase() + s.slice(1)).textContent = s === 'all' ? state.frames.length : state.frames.filter(f => f.status === s).length;
   const locked = !!state.frames.length || busy;
-  for (const id of ['classesInput', 'intervalInput', 'thresholdInput']) $(id).disabled = locked;
+  for (const id of ['taskSelect', 'classesInput', 'intervalInput', 'thresholdInput']) $(id).disabled = locked;
   $('classChips').innerHTML = state.classes.map(c => '<span class="chip">' + esc(c) + '</span>').join('');
-  $('classHelp').textContent = state.frames.length ? 'Ces réglages sont fixés pour ce dataset. Commencez un nouveau dataset pour les modifier.' : 'Séparez les catégories par des virgules. Une catégorie finale par image.';
+  $('classHelp').textContent = state.frames.length ? 'Ces réglages sont fixés pour ce dataset. Commencez un nouveau dataset pour les modifier.' : isDetection(state) ? 'Chaque objet aura sa catégorie et son rectangle. Plusieurs objets d’une même catégorie sont possibles.' : 'Séparez les catégories par des virgules. Une catégorie finale par image.';
+  $('batchHint').textContent = isDetection(state) ? 'Détection · 1 image / requête' : 'Classification · 4 images / lot';
+  $('exportFormat').textContent = isDetection(state) ? 'Détection multi-objets · formats YOLO, COCO et JSONL.' : 'Classification d’images · structure ImageFolder.';
+  $('exportTree').innerHTML = isDetection(state) ? '▾ images/train/ · val/ · test/<br>▾ labels/train/ · val/ · test/<br>◇ data.yaml<br>◇ coco/train.json · val.json · test.json<br>◇ annotations.jsonl · annotations.csv<br>◇ quality_report.json · dataset_card.md<br>◇ sources.json · checksums.sha256' : '▾ train/ · val/ · test/<br>&nbsp;&nbsp; ↳ catégorie/*.jpg<br>◇ annotations.jsonl · annotations.csv<br>◇ classes.json · dataset_card.md<br>◇ quality_report.json · checksums.sha256';
   $('nextReviewBtn').disabled = busy || !state.frames.length;
   $('nextReviewHint').textContent = state.frames.length ? state.frames.length + ' images extraites · ' + pending + ' à vérifier. Passez à l’étape suivante.' : 'Ajoutez une vidéo pour commencer.';
   $('reviewNextBtn').hidden = !pending;
@@ -65,7 +69,7 @@ function renderGuidance({ approved, pending, remaining }) {
     : currentView === 'review'
       ? !state.frames.length ? ['2', 'Commencez par collecter des images', 'Revenez à « Collecter » pour importer une vidéo ou essayer l’exemple.'] : remaining ? ['2', 'Demandez des propositions, puis vérifiez-les', 'Autorisez l’envoi à Google, lancez Gemma et ouvrez chaque image. Les cas indéterminés doivent être examinés.'] : pending ? ['2', pending + ' image(s) attendent votre décision', 'Choisissez la catégorie finale. « Valider et suivante » permet de continuer sans rouvrir les cartes.'] : ['2', 'La revue est terminée', 'Les images validées sont prêtes pour le passeport et l’export. Les images rejetées restent documentées.']
       : approved ? ['3', approved + ' image(s) validée(s) dans votre export', 'Lisez les limites, indiquez les droits des images puis téléchargez le ZIP avec ses annotations.'] : ['3', 'Validez une image pour activer l’export', 'Retournez à « Vérifier », ouvrez une image et confirmez sa catégorie. Le rapport qualité reste téléchargeable.'];
-  $('guideStep').textContent = content[0]; $('workflowTitle').textContent = content[1]; $('workflowDescription').textContent = content[2];
+  if(isDetection(state)&&currentView==='review'&&state.frames.length){content[1]=remaining?'Repérez plusieurs objets dans chaque image':pending?'Vérifiez les rectangles, objet par objet':'Les scènes validées sont prêtes';content[2]=remaining?'Gemma proposera une catégorie et un rectangle pour chaque objet visible. Les scènes encombrées peuvent demander des corrections.':'Ouvrez une image : corrigez les catégories, déplacez les rectangles et dessinez les objets manquants avant de valider.';} $('guideStep').textContent = content[0]; $('workflowTitle').textContent = content[1]; $('workflowDescription').textContent = content[2];
 }
 function renderSources() {
   $('sourceList').innerHTML = state.sources.map(s => '<div class="source-row"><span class="source-icon">' + (s.synthetic ? '✧' : s.type === 'webcam' ? '◎' : '▷') + '</span><div><strong>' + esc(s.name) + '</strong><small>' + (s.synthetic ? 'Illustration synthétique' : s.type === 'webcam' ? 'Capture webcam' : 'SHA-256 ' + esc(s.sha256.slice(0, 12)) + '…') + ' · ' + fmt(s.duration) + ' s</small></div><span>' + state.frames.filter(f => f.sourceId === s.id).length + ' images</span></div>').join('');
@@ -75,7 +79,7 @@ function renderFrames() {
   renderMetrics();
   const frames = state.frames.filter(f => filter === 'all' || f.status === filter);
   if (!frames.length) { $('frameGrid').innerHTML = '<div class="empty-state"><span>✧</span><h3>' + (state.frames.length ? 'Rien dans ce filtre, pour le moment.' : 'Votre première image vous attend.') + '</h3><p>' + (state.frames.length ? 'Choisissez un autre filtre pour retrouver vos images.' : 'Importez une vidéo ou essayez l’exemple synthétique pour explorer le parcours.') + '</p><button class="btn btn-soft" id="backToCollect">Retour à la collecte →</button></div>'; $('backToCollect').onclick = () => showView('collect'); return; }
-  $('frameGrid').innerHTML = frames.map(f => '<article class="frame-card ' + f.status + '" data-frame="' + esc(f.id) + '" tabindex="0" role="button" aria-label="Vérifier ' + esc(f.id) + '"><img loading="lazy" src="' + f.data + '" alt="Image extraite à ' + fmt(f.time) + ' secondes"><div class="frame-card-body"><div><span class="frame-label">' + esc(f.label || 'Sans proposition') + '</span><span class="status-tag ' + f.status + '">' + (f.status === 'filtered' ? esc(f.filterReason) : statusName[f.status]) + '</span></div><p class="frame-reason">' + esc(f.prediction?.reason || (f.status === 'filtered' ? 'Filtre indicatif : vous pouvez récupérer cette image.' : 'Lancez Gemma ou attribuez une catégorie vous-même.')) + '</p><div class="frame-meta"><span>' + esc(f.sourceId.slice(0, 8)) + ' · ' + fmt(f.time) + ' s</span><span>Netteté ' + fmt(f.sharpness) + '</span></div></div><div class="card-action"><span>' + (f.status === 'approved' ? 'Revoir la décision' : 'Ouvrir & vérifier') + '</span><span>↗</span></div></article>').join('');
+  $('frameGrid').innerHTML = frames.map(f => '<article class="frame-card ' + f.status + '" data-frame="' + esc(f.id) + '" tabindex="0" role="button" aria-label="Vérifier ' + esc(f.id) + '">' + (isDetection(state)?detectionThumbnail(f):'<img loading="lazy" src="'+f.data+'" alt="Image extraite">') + '<div class="frame-card-body"><div><span class="frame-label">' + esc(isDetection(state)?(f.objects?.length||0)+' objet(s)':f.label||'Sans proposition') + '</span><span class="status-tag ' + f.status + '">' + (f.status === 'filtered' ? esc(f.filterReason) : statusName[f.status]) + '</span></div><p class="frame-reason">' + esc(f.prediction?.reason || (f.status === 'filtered' ? 'Filtre indicatif : vous pouvez récupérer cette image.' : 'Lancez Gemma ou attribuez une catégorie vous-même.')) + '</p><div class="frame-meta"><span>' + esc(f.sourceId.slice(0, 8)) + ' · ' + fmt(f.time) + ' s</span><span>Netteté ' + fmt(f.sharpness) + '</span></div></div><div class="card-action"><span>' + (f.status === 'approved' ? 'Revoir la décision' : 'Ouvrir & vérifier') + '</span><span>↗</span></div></article>').join('');
   for (const card of $('frameGrid').querySelectorAll('[data-frame]')) { card.onclick = () => openFrame(card.dataset.frame); card.onkeydown = e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openFrame(card.dataset.frame); } }; }
 }
 
@@ -84,6 +88,15 @@ function openFrame(id) {
   const f = state.frames.find(frame => frame.id === id); if (!f) return;
   activeFrame = id; reviewOpened = performance.now();
   const index = state.frames.indexOf(f), source = state.sources.find(s => s.id === f.sourceId);
+  if (isDetection(state)) {
+    openDetectionEditor({frame:f,classes:state.classes,source,index,total:state.frames.length,
+      onNavigate:i=>{if(i>=0&&i<state.frames.length)openFrame(state.frames[i].id);},onDirty:renderMetrics,
+      onApprove:advance=>{f.status='approved';f.reviewedAt=new Date().toISOString();f.qualityOverride=!!f.filterReason;finishReview(advance);toast('Objets validés et ajoutés au futur export.');},
+      onReject:()=>{f.status='rejected';f.reviewedAt=new Date().toISOString();finishReview();},
+      onRestore:()=>{f.status='pending';f.qualityOverride=true;finishReview();}});
+    if (!$('frameDialog').open) $('frameDialog').showModal();
+    $('frameDialog').scrollTop=0;return;
+  }
   $('frameDetail').innerHTML =
     '<div class="detail-nav"><span>Image ' + (index + 1) + ' sur ' + state.frames.length + '</span><div class="detail-nav-actions">' +
     '<button id="previousFrame" aria-label="Image précédente" title="Image précédente"' + (index === 0 ? ' disabled' : '') + '>←</button>' +
@@ -141,6 +154,7 @@ function syncSettings() {
   const slugs = classes.map(safeSlug);
   if (classes.length < 2 || classes.length > 8 || classes.some(c => c.length > 40 || c === UNKNOWN || /[\r\n<>]/.test(c)) || new Set(classes).size !== classes.length || new Set(slugs).size !== slugs.length) throw new Error('Choisis 2 à 8 catégories distinctes, sans doublons après normalisation.');
   state.classes = classes; state.interval = +$('intervalInput').value; state.threshold = +$('thresholdInput').value;
+  state.task = $('taskSelect').value;
   state.name = $('datasetName').value.trim() || 'Mon dataset';
 }
 async function captureImage(drawable, source, time) {
@@ -154,7 +168,7 @@ async function captureImage(drawable, source, time) {
   const data = canvas.toDataURL('image/jpeg', .83);
   const bytes = Uint8Array.from(atob(data.split(',')[1]), c => c.charCodeAt(0));
   const filterReason = classifyQuality(metrics, state.frames.filter(f => !f.filterReason || f.qualityOverride), state.threshold);
-  state.frames.push({ id: 'img_' + crypto.randomUUID().slice(0, 8), sourceId: source.id, time: Math.round(time * 100) / 100, data, sha256: await sha256(bytes), ...metrics, filterReason, status: filterReason ? 'filtered' : 'pending', label: '', prediction: null, reviewedAt: null });
+  state.frames.push({ id: 'img_' + crypto.randomUUID().slice(0, 8), sourceId: source.id, time: Math.round(time * 100) / 100, data, width:canvas.width,height:canvas.height,objects:[],sha256: await sha256(bytes), ...metrics, filterReason, status: filterReason ? 'filtered' : 'pending', label: '', prediction: null, reviewedAt: null });
 }
 function waitEvent(element, event, action, timeout = 20000) {
   return new Promise((resolve, reject) => {
@@ -263,6 +277,7 @@ function demoCanvas(kind, index) {
   c.restore(); c.fillStyle = '#645d7370'; c.font = '11px sans-serif'; c.fillText('LUSHIDATA · ILLUSTRATION SYNTHÉTIQUE', 22, 377);
   return canvas;
 }
+function detectionDemoCanvas(scene, index) { const canvas=document.createElement('canvas');canvas.width=800;canvas.height=420;const ctx=canvas.getContext('2d');ctx.fillStyle='#f2edf7';ctx.fillRect(0,0,800,420);for(let col=0;col<3;col++){const kind=(col+scene)%3;ctx.drawImage(demoCanvas(kind,index),180,35,280,330,col*264+8,30,250,340);}ctx.fillStyle='#715683';ctx.font='12px sans-serif';ctx.fillText('LUSHIDATA · SCENE MULTI-OBJETS SYNTHETIQUE',20,400);return canvas;}
 async function loadDemo() {
   if (busy) return;
   if (state.frames.length) return toast('Démarre un nouveau dataset pour ouvrir l’exemple synthétique.', true);
@@ -270,11 +285,11 @@ async function loadDemo() {
   setBusy(true); $('progressArea').hidden = false;
   try {
     for (let kind = 0; kind < 3; kind++) {
-      const source = { id: 'demo_source_' + kind, name: ['Bouteille illustrée', 'Canette illustrée', 'Carton illustré'][kind], duration: kind === 0 ? 18 : 12, synthetic: true, type: 'synthetic', checksum_kind: 'sha256-of-procedural-recipe-id', rights: 'Illustrations procédurales LushiData, CC0-1.0.', sha256: await sha256('lushidata-demo-v1-' + kind) };
+      const source = { id: 'demo_source_' + kind, name: isDetection(state)?'Scène multi-objets illustrée '+(kind+1):['Bouteille illustrée', 'Canette illustrée', 'Carton illustré'][kind], duration: kind === 0 ? 18 : 12, synthetic: true, type: 'synthetic', checksum_kind: 'sha256-of-procedural-recipe-id', rights: 'Illustrations procédurales LushiData, CC0-1.0.', sha256: await sha256('lushidata-demo-'+state.task+'-'+kind) };
       state.sources.push(source);
-      for (let i = 0; i < 4; i++) { await captureImage(demoCanvas(kind, i), source, i * 3); $('progressBar').value = (kind * 4 + i + 1) / 12 * 100; await pause(15); }
+      for (let i = 0; i < 4; i++) { await captureImage(isDetection(state)?detectionDemoCanvas(kind,i):demoCanvas(kind,i), source, i * 3); $('progressBar').value = (kind * 4 + i + 1) / 12 * 100; await pause(15); }
     }
-    const source = state.sources[0], canvas = demoCanvas(0, 0);
+    const source = state.sources[0], canvas = isDetection(state)?detectionDemoCanvas(0,0):demoCanvas(0,0);
     await captureImage(canvas, source, 12); // Intentional exact visual duplicate for filter demonstration.
     const blank = document.createElement('canvas'); blank.width = 640; blank.height = 400; blank.getContext('2d').fillStyle = '#bab4b0'; blank.getContext('2d').fillRect(0, 0, 640, 400); await captureImage(blank, source, 15);
     state.license = 'CC0-1.0 — illustrations synthétiques LushiData uniquement'; $('licenseInput').value = state.license;
@@ -291,10 +306,11 @@ async function runGemma() {
   state.sources.filter(s => !s.synthetic).forEach(s => s.rights = 'L’utilisateur a déclaré disposer des droits et autorisé l’envoi à Google.');
   let done = 0;
   try {
-    for (let i = 0; i < frames.length; i += 4) {
-      const batch = frames.slice(i, i + 4); progress.textContent = '✦ Gemma observe les images… ' + done + ' / ' + frames.length + ' · lot ' + (Math.floor(i / 4) + 1);
+    const batchSize=isDetection(state)?1:4;
+    for (let i = 0; i < frames.length; i += batchSize) {
+      const batch = frames.slice(i, i + batchSize); progress.textContent = (isDetection(state)?'✦ Gemma repère les objets… ':'✦ Gemma observe les images… ') + done + ' / ' + frames.length + ' · lot ' + (Math.floor(i / batchSize) + 1);
       state.requests++;
-      const response = await fetch('/api/annotate', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ classes: state.classes, frames: batch.map(({ id, data }) => ({ id, data })) }), signal: AbortSignal.timeout(70000) });
+      const response = await fetch('/api/annotate', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ task:state.task,classes: state.classes, frames: batch.map(({ id, data }) => ({ id, data })) }), signal: AbortSignal.timeout(70000) });
       const result = await response.json();
       state.requests += Math.max(0, (result.provenance?.upstream_requests || result.attempts || 1) - 1);
       state.gemmaMs += result.provenance?.elapsed_ms || result.elapsed_ms || 0;
@@ -302,9 +318,10 @@ async function runGemma() {
       for (const annotation of result.annotations) {
         const f = batch.find(f => f.id === annotation.id); if (!f) throw new Error('Identifiant inattendu dans la réponse.');
         f.prediction = { ...annotation, ...result.provenance }; f.label = annotation.label;
+        if(isDetection(state)){f.objects=structuredClone(annotation.objects);f.emptyConfirmed=false;f.sceneConfirmed=false;}
       }
       done += batch.length; renderFrames();
-      if (i + 4 < frames.length) await pause(1500);
+      if (i + batchSize < frames.length) await pause(1500);
     }
     progress.textContent = '✓ ' + done + ' propositions reçues de Gemma. À vous de vérifier chaque image.'; toast('Gemma a terminé. Aucune image n’a été validée automatiquement.');
     $('apiStatus').innerHTML = '<span class="dot"></span> Gemma · appel réussi'; $('apiStatus').className = 'api-badge';
@@ -315,11 +332,12 @@ async function runGemma() {
 }
 function renderPassport() {
   const report = datasetReport(state), counts = report.counts, max = Math.max(1, ...Object.values(counts.by_class));
-  $('passportContent').innerHTML = '<div class="passport-body"><div class="report-numbers"><div class="report-number"><strong>' + counts.approved + '</strong><small>images validées</small></div><div class="report-number"><strong>' + state.sources.length + '</strong><small>sources documentées</small></div><div class="report-number"><strong>' + report.split.independentGroups + '</strong><small>groupes indépendants</small></div></div><h3 class="report-section-title">DISTRIBUTION DES CATÉGORIES</h3>' + state.classes.map(c => '<div class="class-bar"><span title="' + esc(c) + '">' + esc(c) + '</span><div><i style="width:' + counts.by_class[c] / max * 100 + '%"></i></div><span>' + counts.by_class[c] + '</span></div>').join('') + '<h3 class="report-section-title">SÉPARATION PAR SOURCE, PAS PAR IMAGE</h3><div class="split-legend">' + ['train', 'val', 'test'].map(s => '<div>' + s.toUpperCase() + '<strong>' + counts.by_split[s] + '</strong> images</div>').join('') + '</div><p style="font-size:9px;margin-top:10px">Une vidéo reste dans une seule partition. Les sources présentant des images visuellement similaires sont regroupées.</p><h3 class="report-section-title">LES TRACES DE VOTRE TRAVAIL</h3><div class="evidence-row"><span>Modèle hébergé</span><span>' + MODEL + '</span></div><div class="evidence-row"><span>Requêtes Gemma / temps API</span><span>' + state.requests + ' / ' + fmt(state.gemmaMs / 1000) + ' s</span></div><div class="evidence-row"><span>Propositions revues / inchangées</span><span>' + report.review.model_proposals_reviewed + ' / ' + report.review.approved_without_label_change + '</span></div><div class="evidence-row"><span>Temps de revue enregistré</span><span>' + fmt(state.reviewMs / 1000) + ' s</span></div><div class="evidence-row"><span>Traçabilité</span><span>SHA-256 · source · horodatage · décision</span></div><div class="warning-box"><strong>◈ Limites à conserver avec les données</strong><ul>' + report.limitations.map(w => '<li>' + esc(w) + '</li>').join('') + '</ul></div></div>';
+  $('passportContent').innerHTML = '<div class="passport-body"><div class="report-numbers"><div class="report-number"><strong>' + counts.approved + '</strong><small>images validées</small></div><div class="report-number"><strong>' + (isDetection(state)?report.counts.objects:state.sources.length) + '</strong><small>'+(isDetection(state)?'objets validés':'sources documentées')+'</small></div><div class="report-number"><strong>' + report.split.independentGroups + '</strong><small>groupes indépendants</small></div></div><h3 class="report-section-title">DISTRIBUTION DES CATÉGORIES</h3>' + state.classes.map(c => '<div class="class-bar"><span title="' + esc(c) + '">' + esc(c) + '</span><div><i style="width:' + counts.by_class[c] / max * 100 + '%"></i></div><span>' + counts.by_class[c] + '</span></div>').join('') + '<h3 class="report-section-title">SÉPARATION PAR SOURCE, PAS PAR IMAGE</h3><div class="split-legend">' + ['train', 'val', 'test'].map(s => '<div>' + s.toUpperCase() + '<strong>' + counts.by_split[s] + '</strong> images</div>').join('') + '</div><p style="font-size:12px;margin-top:10px">Une vidéo reste dans une seule partition. Les sources présentant des images visuellement similaires sont regroupées.</p><h3 class="report-section-title">LES TRACES DE VOTRE TRAVAIL</h3><div class="evidence-row"><span>Modèle hébergé</span><span>' + MODEL + '</span></div><div class="evidence-row"><span>Requêtes Gemma / temps API</span><span>' + state.requests + ' / ' + fmt(state.gemmaMs / 1000) + ' s</span></div><div class="evidence-row"><span>Propositions revues / inchangées</span><span>' + report.review.model_proposals_reviewed + ' / ' + report.review.approved_without_label_change + '</span></div><div class="evidence-row"><span>Temps de revue enregistré</span><span>' + fmt(state.reviewMs / 1000) + ' s</span></div><div class="evidence-row"><span>Traçabilité</span><span>SHA-256 · source · horodatage · décision</span></div><div class="warning-box"><strong>◈ Limites à conserver avec les données</strong><ul>' + report.limitations.map(w => '<li>' + esc(w) + '</li>').join('') + '</ul></div></div>';
   $('exportBtn').disabled = busy || !counts.approved;
 }
 function download(blob, filename) { const url = URL.createObjectURL(blob), link = document.createElement('a'); link.href = url; link.download = filename; link.click(); setTimeout(() => URL.revokeObjectURL(url), 30000); }
 function datasetCard(report) {
+  if(isDetection(state))return '# '+state.name+'\n\nDataset de détection multi-objets préparé avec Gemma 4 et vérification humaine.\n\n## Formats\n\nYOLO : images/<split>/*.jpg et labels/<split>/*.txt ; chaque ligne = class_id x_center y_center width height, normalisés entre 0 et 1. data.yaml liste les catégories (indices à partir de 0). COCO : coco/<split>.json, catégories à partir de 1 et boîtes [x,y,largeur,hauteur] en pixels ; file_name est relatif à la racine du ZIP. annotations.jsonl conserve les boîtes [ymin,xmin,ymax,xmax] normalisées sur 0..1000 et leur provenance.\n\n## Revue\n\n'+report.counts.approved+' images validées, '+report.counts.objects+' objets. Chaque scène a été validée humainement. Une image sans objet exige une confirmation explicite. Les sorties de Gemma ne constituent pas une vérité terrain automatique.\n\n## Partitions et limites\n\nSources entières et groupes de similarité conservés ensemble. Aucun ratio ni équilibre garanti.\n'+report.limitations.map(w=>'- '+w).join('\n')+'\n- Détection sur images échantillonnées, pas suivi d’objets ni analyse vidéo en temps réel.\n- Gemma propose au maximum 20 objets ; les scènes encombrées, occlusions et petites tailles demandent une correction humaine.\n\n## Droits\n\n'+report.license+'\n\n## Intégrité\n\nConsulter checksums.sha256, sources.json, quality_report.json et annotation_prompts.json.\n';
   return '# ' + state.name + '\n\nDataset de classification d’images à étiquette unique, préparé avec LushiData ' + VERSION + '.\n\n' +
   '## Usage\n\nPrototype de classification. Les catégories ne sont pas des boîtes de détection. Le dataset est petit et ne démontre aucune performance d’un futur modèle.\n\n' +
   '## Contenu\n\n' + report.counts.approved + ' images JPEG validées humainement. Catégories : ' + state.classes.join(', ') + '.\n\n' +
@@ -331,26 +349,26 @@ function datasetCard(report) {
 }
 async function exportDataset() {
   if (busy) return;
-  const approved = state.frames.filter(f => f.status === 'approved' && state.classes.includes(f.label));
+  const approved = state.frames.filter(f => isExportable(f,state));
   if (!approved.length) return toast('Valide au moins une image avant l’export.', true);
   setBusy(true);
   try {
     state.license = $('licenseInput').value.trim();
     const report = datasetReport(state), files = [], records = [];
-    for (const f of approved) {
-      const record = annotationRecord(f, report.split.bySource[f.sourceId], state.classes); records.push(record);
-      files.push({ name: record.file, data: Uint8Array.from(atob(f.data.split(',')[1]), c => c.charCodeAt(0)) });
-    }
+    if(isDetection(state)){const detection=detectionExport(approved,state,report.split);records.push(...detection.records);files.push(...detection.files);}
+    else for(const f of approved)records.push(annotationRecord(f,report.split.bySource[f.sourceId],state.classes));
+    for (const f of approved) {const record=records.find(r=>r.id===f.id);files.push({name:record.file,data:Uint8Array.from(atob(f.data.split(',')[1]),c=>c.charCodeAt(0))});}
     files.push({ name: 'annotations.jsonl', data: records.map(r => JSON.stringify(r)).join('\n') + '\n' });
-    const columns = ['id', 'file', 'label', 'class_id', 'split', 'source_id', 'source_timestamp_seconds', 'sha256', 'annotation_origin'];
-    files.push({ name: 'annotations.csv', data: columns.join(',') + '\n' + records.map(r => columns.map(c => csvCell(r[c])).join(',')).join('\n') + '\n' });
-    files.push({ name: 'classes.json', data: JSON.stringify(state.classes.map((label, id) => ({ id, label, folder: safeSlug(label) })), null, 2) });
+    const columns = isDetection(state)?['id','file','object_id','label','class_id','ymin','xmin','ymax','xmax','split','source_id','sha256']:['id', 'file', 'label', 'class_id', 'split', 'source_id', 'source_timestamp_seconds', 'sha256', 'annotation_origin'];
+    const csvRows=isDetection(state)?records.flatMap(r=>r.objects.map(o=>({...r,object_id:o.id,label:o.label,class_id:o.class_id,ymin:o.box_2d[0],xmin:o.box_2d[1],ymax:o.box_2d[2],xmax:o.box_2d[3]}))):records;
+    files.push({ name: 'annotations.csv', data: columns.join(',') + '\n' + csvRows.map(r => columns.map(c => csvCell(r[c])).join(',')).join('\n') + '\n' });
+    files.push({ name: 'classes.json', data: JSON.stringify(state.classes.map((label, id) => ({ id, label, folder: safeSlug(label),...(isDetection(state)?{coco_id:id+1}:{}) })), null, 2) });
     files.push({ name: 'quality_report.json', data: JSON.stringify(report, null, 2) });
     files.push({ name: 'sources.json', data: JSON.stringify(report.sources, null, 2) });
     files.push({ name: 'dataset_card.md', data: datasetCard(report) });
-    files.push({ name: 'annotation_prompt.txt', data: 'Template — ' + PROMPT_VERSION + '\n\n' + makeAnnotationPrompt(state.classes, ['<image ids in request order>']) });
+    files.push({ name: 'annotation_prompt.txt', data: 'Template — ' + promptVersion(state.task) + '\n\n' + makeAnnotationPrompt(state.classes, ['<image ids in request order>'],state.task) });
     const requestIds = [...new Set(state.frames.filter(f => f.prediction).map(f => f.prediction.request_id))];
-    files.push({ name: 'annotation_prompts.json', data: JSON.stringify(requestIds.map(id => { const batch = state.frames.filter(f => f.prediction?.request_id === id); return { request_id: id, prompt_sha256: batch[0].prediction.prompt_sha256, prompt: makeAnnotationPrompt(state.classes, batch.map(f => f.id)) }; }), null, 2) });
+    files.push({ name: 'annotation_prompts.json', data: JSON.stringify(requestIds.map(id => { const batch = state.frames.filter(f => f.prediction?.request_id === id); return { request_id: id, prompt_sha256: batch[0].prediction.prompt_sha256, prompt: makeAnnotationPrompt(state.classes, batch.map(f => f.id),state.task) }; }), null, 2) });
     files.push({ name: 'rejected_manifest.json', data: JSON.stringify(state.frames.filter(f => f.status !== 'approved').map(({ data, ...metadata }) => metadata), null, 2) });
     const sums = []; for (const file of files) sums.push(await sha256(typeof file.data === 'string' ? enc.encode(file.data) : file.data) + '  ' + file.name);
     files.push({ name: 'checksums.sha256', data: sums.join('\n') + '\n' });
@@ -367,6 +385,8 @@ $('dropZone').ondrop = e => { e.preventDefault(); $('dropZone').classList.remove
 $('cameraBtn').onclick = startCamera; $('recordBtn').onclick = captureCamera; $('closeCameraBtn').onclick = () => { if (!cameraCapturing) stopCamera(); };
 $('demoBtn').onclick = loadDemo; $('annotateBtn').onclick = runGemma; $('exportBtn').onclick = exportDataset;
 $('consentInput').onchange = renderMetrics;
+$('taskSelect').onchange=()=>{state.task=$('taskSelect').value;renderMetrics();};
+$('frameDialog').addEventListener('close',()=>renderFrames());
 $('reviewNextBtn').onclick = () => { const next = state.frames.find(f => f.status === 'pending'); if (next) openFrame(next.id); };
 $('datasetName').oninput = () => { state.name = $('datasetName').value.trim() || 'Mon dataset'; $('breadcrumb').textContent = state.name; };
 $('classesInput').oninput = () => { try { syncSettings(); renderMetrics(); } catch { $('classChips').textContent = 'Définissez 2 à 8 catégories distinctes.'; } };
@@ -375,7 +395,7 @@ $('thresholdInput').oninput = e => { state.threshold = +e.target.value; $('thres
 $('licenseInput').oninput = e => state.license = e.target.value;
 $('reportBtn').onclick = () => download(new Blob([JSON.stringify(datasetReport(state), null, 2)], { type: 'application/json' }), safeSlug(state.name) + '-qualite.json');
 $('helpBtn').onclick = () => $('helpDialog').showModal(); $('closeHelpBtn').onclick = $('startHelpBtn').onclick = () => $('helpDialog').close(); $('closeFrameBtn').onclick = () => { $('frameDialog').close(); activeFrame = null; };
-$('resetBtn').onclick = () => { if (busy) return; if (state.frames.length && !confirm('Créer un nouveau dataset ? Le travail non exporté sera perdu.')) return; stopCamera(); state = fresh(); filter = 'all'; $('datasetName').value = state.name; $('classesInput').value = state.classes.join(', '); $('intervalInput').value = state.interval; $('thresholdInput').value = state.threshold; $('intervalOutput').textContent = '1 image / 3 s'; $('thresholdOutput').textContent = '35'; $('licenseInput').value = ''; $('consentInput').checked = false; $('annotationProgress').hidden = true; document.querySelectorAll('[data-filter]').forEach(b => b.classList.toggle('active', b.dataset.filter === 'all')); renderMetrics(); renderSources(); showView('collect'); toast('Nouvel espace prêt.'); };
+$('resetBtn').onclick = () => { if (busy) return; if (state.frames.length && !confirm('Créer un nouveau dataset ? Le travail non exporté sera perdu.')) return; stopCamera(); state = fresh(); filter = 'all'; $('datasetName').value = state.name; $('taskSelect').value=state.task; $('classesInput').value = state.classes.join(', '); $('intervalInput').value = state.interval; $('thresholdInput').value = state.threshold; $('intervalOutput').textContent = '1 image / 3 s'; $('thresholdOutput').textContent = '35'; $('licenseInput').value = ''; $('consentInput').checked = false; $('annotationProgress').hidden = true; document.querySelectorAll('[data-filter]').forEach(b => b.classList.toggle('active', b.dataset.filter === 'all')); renderMetrics(); renderSources(); showView('collect'); toast('Nouvel espace prêt.'); };
 window.addEventListener('beforeunload', e => { stopCamera(); if (state.frames.length) { e.preventDefault(); e.returnValue = ''; } });
 document.addEventListener('visibilitychange', () => { if (document.hidden && cameraStream && !cameraCapturing) stopCamera(); });
 renderMetrics();

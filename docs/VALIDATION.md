@@ -4,7 +4,7 @@ Ces observations décrivent le prototype. Elles ne constituent pas un benchmark 
 
 ## Vérifications automatisées
 
-`npm run check` : 18 tests ciblés réussis, vérification de syntaxe, build et Worker ESM valides. Les tests API unitaires utilisent des réponses contrôlées et ne consomment aucune clé.
+`npm run check` : 27 tests ciblés réussis, vérification de syntaxe, build et Worker ESM valides. Les tests API unitaires utilisent des réponses contrôlées et ne consomment aucune clé.
 
 Les tests de résilience vérifient la récupération après des erreurs Google 503 et 500, l’arrêt après trois tentatives, le respect d’un long délai de quota et la gestion des interruptions réseau. Aucun échec n’est remplacé par des annotations inventées.
 
@@ -31,3 +31,11 @@ Un lot de quatre images extraites de la vidéo réelle publique « Recycling Vid
 Le ZIP téléchargé a été ouvert avec `zipfile` de Python : intégrité CRC correcte, nombre de lignes d’annotations cohérent avec les images validées, empreintes SHA-256 des images conformes. Les empreintes des consignes exportées correspondent aux consignes exactes envoyées au modèle. Le modèle et les décisions humaines sont présents dans la provenance.
 
 Les vidéos originales, `.env`, les clés et les fichiers locaux de test sont exclus de la publication du code. L’archive de déploiement contient seulement le Worker construit et son manifeste.
+
+## Détection multi-objets — version 1.1
+
+Neuf tests supplémentaires vérifient les coordonnées, la conversion YOLO, les dimensions et catégories COCO, les instances multiples d’une même catégorie, les scènes non revues, les images négatives et le contrat API.
+
+Un appel réel à Gemma a proposé trois objets dans la scène synthétique et cinq dans une image de la vidéo publique de recyclage. La scène réelle était signalée incomplète ; ces propositions ne constituent pas une vérité terrain.
+
+Le parcours navigateur contrôlé a exercé le dessin, le déplacement et la suppression de rectangles, les catégories indéterminées bloquantes, la confirmation d’une image négative, la remise en attente après modification et l’export sur ordinateur et mobile. Les réponses de ce test UX sont simulées et distinguées des appels réels ci-dessus. Le ZIP a été relu avec Python : deux images, trois objets, cohérence COCO/YOLO, dimensions pixel et SHA-256 conformes.

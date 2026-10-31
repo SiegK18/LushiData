@@ -1,4 +1,4 @@
-import { MODEL, PROMPT_VERSION, makeAnnotationPrompt } from './core.js';
+import { VERSION, MODEL, PROMPT_VERSION, TASK_CLASSIFICATION, TASK_DETECTION, promptVersion, validBox, makeAnnotationPrompt } from './core.js';
 const PAGE = "__PAGE__";
 const security = {
   'X-Content-Type-Options': 'nosniff', 'Referrer-Policy': 'same-origin',
@@ -8,8 +8,10 @@ const security = {
 const json = (data, status = 200) => new Response(JSON.stringify(data), { status, headers: { ...security, 'Content-Type': 'application/json; charset=utf-8' } });
 const rate = new Map();
 export function validateInput(body) {
+  if (body?.task !== undefined && ![TASK_CLASSIFICATION,TASK_DETECTION].includes(body.task)) throw new Error('Type de dataset inconnu.');
   if (!body || !Array.isArray(body.classes) || body.classes.length < 2 || body.classes.length > 8 || body.classes.some(c => typeof c !== 'string' || !c.trim() || c.length > 40 || /[\r\n<>]/.test(c) || c === 'indéterminé') || new Set(body.classes).size !== body.classes.length) throw new Error('Définis entre 2 et 8 catégories distinctes (40 caractères maximum).');
   if (!Array.isArray(body.frames) || body.frames.length < 1 || body.frames.length > 4) throw new Error('Une requête doit contenir entre 1 et 4 images.');
+  if (body.task === TASK_DETECTION && body.frames.length !== 1) throw new Error('La détection multi-objets traite une image à la fois.');
   const ids = new Set();
   for (const f of body.frames) {
     if (!f || typeof f.id !== 'string' || !/^[a-zA-Z0-9_-]{1,80}$/.test(f.id) || ids.has(f.id) || typeof f.data !== 'string' || f.data.length > 700_000 || !/^data:image\/jpeg;base64,[A-Za-z0-9+/]+=*$/.test(f.data)) throw new Error('Image JPEG invalide, trop volumineuse ou identifiant dupliqué.');
@@ -19,10 +21,10 @@ export function validateInput(body) {
   }
   return body;
 }
-export function makePrompt(classes, ids) {
-  return makeAnnotationPrompt(classes, ids);
+export function makePrompt(classes, ids, task = TASK_CLASSIFICATION) {
+  return makeAnnotationPrompt(classes, ids, task);
 }
-export function parseAnnotations(text, frames, classes) {
+export function parseAnnotations(text, frames, classes, task = TASK_CLASSIFICATION) {
   const clean = String(text).trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '');
   const first = clean.indexOf('['), last = clean.lastIndexOf(']');
   if (first < 0 || last < first) throw new Error('Gemma n’a pas renvoyé un tableau JSON exploitable. Réessaie ce lot.');
@@ -30,6 +32,10 @@ export function parseAnnotations(text, frames, classes) {
   if (!Array.isArray(rows) || rows.length !== frames.length || new Set(rows.map(r => r?.id)).size !== frames.length || frames.some(f => !rows.some(r => r?.id === f.id))) throw new Error('Réponse Gemma incomplète ou identifiants incohérents. Aucune annotation du lot n’a été appliquée.');
   return frames.map(f => {
     const r = rows.find(row => row.id === f.id);
+    if (task === TASK_DETECTION) {
+      if (!Array.isArray(r.objects) || r.objects.length > 20 || r.objects.some(o => !o || !validBox(o.box_2d))) throw new Error('Rectangles de détection invalides.');
+      return { id:f.id, objects:r.objects.map((o,index) => ({id:'obj_'+index,label:classes.includes(o.label)?o.label:'indéterminé',box_2d:[...o.box_2d],reason:typeof o.reason==='string'?o.reason.slice(0,180):'À vérifier.',uncertain:!classes.includes(o.label)||o.uncertain!==false})),incomplete:r.incomplete!==false,reason:typeof r.reason==='string'?r.reason.slice(0,350):'Vérifiez tous les objets et ajoutez les éventuels manquants.' };
+    }
     const valid = classes.includes(r.label);
     return { id: f.id, label: valid ? r.label : 'indéterminé', uncertain: !valid || r.uncertain !== false, reason: typeof r.reason === 'string' ? r.reason.slice(0, 350) : 'Vérification humaine nécessaire.' };
   });
@@ -41,7 +47,7 @@ export async function annotate(body, env, fetcher = fetch, runtime = {}) {
   if (!key) return json({ error: 'La clé Google AI Studio doit être configurée côté serveur dans GEMINI_API_KEY.', code: 'MISSING_KEY' }, 503);
   const model = env.GEMMA_MODEL || MODEL;
   if (model !== MODEL) return json({ error: 'Ce projet est configuré exclusivement pour Gemma 4 26B A4B IT.', code: 'INVALID_MODEL' }, 503);
-  const prompt = makePrompt(body.classes, body.frames.map(f => f.id));
+  const prompt = makePrompt(body.classes, body.frames.map(f => f.id), body.task);
   const parts = [{ text: prompt }];
   for (const f of body.frames) parts.push({ text: 'IMAGE_ID=' + f.id }, { inlineData: { mimeType: 'image/jpeg', data: f.data.split(',')[1] } });
   const start = Date.now();
@@ -49,7 +55,7 @@ export async function annotate(body, env, fetcher = fetch, runtime = {}) {
   const sleep = runtime.sleep || (ms => new Promise(resolve => setTimeout(resolve, ms)));
   const now = runtime.now || Date.now;
   const deadline = now() + 55000;
-  const payload = JSON.stringify({ contents: [{ role: 'user', parts }], generationConfig: { temperature: .1, maxOutputTokens: 2048, thinkingConfig: { thinkingLevel: 'minimal' } } });
+  const payload = JSON.stringify({ contents: [{ role: 'user', parts }], generationConfig: { temperature: .1, maxOutputTokens: body.task===TASK_DETECTION?4096:2048, thinkingConfig: { thinkingLevel: 'minimal' } } });
   let response, attempts = 0;
   for (let attempt = 0; attempt < 3 && now() < deadline; attempt++) {
     attempts++;
@@ -59,7 +65,7 @@ export async function annotate(body, env, fetcher = fetch, runtime = {}) {
     try {
       response = await fetcher('https://generativelanguage.googleapis.com/v1beta/models/' + MODEL + ':generateContent', {
         method: 'POST', headers: { 'Content-Type': 'application/json', 'x-goog-api-key': key }, body: payload,
-        signal: AbortSignal.timeout(Math.max(1, Math.min(17000, deadline - now())))
+        signal: AbortSignal.timeout(Math.max(1, Math.min(body.task===TASK_DETECTION?30000:17000, deadline - now())))
       });
     } catch { /* Network interruptions are retried within the same bounded budget. */ }
     if (response?.ok) break;
@@ -88,8 +94,8 @@ export async function annotate(body, env, fetcher = fetch, runtime = {}) {
   try {
     const data = await response.json();
     const text = data.candidates?.[0]?.content?.parts?.filter(p => !p.thought).map(p => p.text || '').join('') || '';
-    const annotations = parseAnnotations(text, body.frames, body.classes);
-    return json({ annotations, provenance: { model: MODEL, prompt_version: PROMPT_VERSION, prompt_sha256: await hash(prompt), annotated_at: new Date().toISOString(), request_id: requestId, elapsed_ms: Date.now() - start, upstream_requests: attempts, recovered_after_retry: attempts > 1, usage: data.usageMetadata || null } });
+    const annotations = parseAnnotations(text, body.frames, body.classes, body.task);
+    return json({ annotations, provenance: { model: MODEL, task:body.task||TASK_CLASSIFICATION, prompt_version: promptVersion(body.task), prompt_sha256: await hash(prompt), annotated_at: new Date().toISOString(), request_id: requestId, elapsed_ms: Date.now() - start, upstream_requests: attempts, recovered_after_retry: attempts > 1, usage: data.usageMetadata || null } });
   } catch { return json({ error: 'Réponse Gemma non exploitable. Aucune proposition artificielle n’a été ajoutée ; réessaie le lot.', code: 'INVALID_MODEL_OUTPUT' }, 502); }
 }
 export default {
@@ -97,7 +103,7 @@ export default {
     const url = new URL(request.url);
     if (url.pathname === '/' && request.method === 'GET') return new Response(PAGE, { headers: { ...security, 'Content-Type': 'text/html; charset=utf-8' } });
     if (url.pathname === '/favicon.ico') return new Response(null, { status: 204 });
-    if (url.pathname === '/api/health' && request.method === 'GET') return json({ app: 'LushiData', version: '1.0.0', model: MODEL, configured: !!env.GEMINI_API_KEY, storage: 'browser-memory', api_tested: false });
+    if (url.pathname === '/api/health' && request.method === 'GET') return json({ app: 'LushiData', version: VERSION, model: MODEL, configured: !!env.GEMINI_API_KEY, storage: 'browser-memory', api_tested: false });
     if (url.pathname === '/api/annotate' && request.method === 'POST') {
       const origin = request.headers.get('origin');
       if (origin && origin !== url.origin) return json({ error: 'Origine refusée.' }, 403);
