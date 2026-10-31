@@ -61,7 +61,7 @@ function openFrame(id) {
   if (!$('frameDialog').open) $('frameDialog').showModal();
   if ($('approveFrame')) $('approveFrame').onclick = () => {
     const label = $('labelSelect').value; if (!state.classes.includes(label)) return toast('Choisis une catégorie valide avant de confirmer.', true);
-    f.label = label; f.status = 'approved'; f.reviewedAt = new Date().toISOString(); finishReview(); toast('Image validée et ajoutée au futur export.');
+    f.label = label; f.status = 'approved'; f.qualityOverride = !!f.filterReason; f.reviewedAt = new Date().toISOString(); finishReview(); toast('Image validée et ajoutée au futur export.');
   };
   if ($('restoreFrame')) $('restoreFrame').onclick = () => { f.status = 'pending'; f.qualityOverride = true; finishReview(); toast('Image récupérée. Elle reste à annoter et à valider.'); };
   $('rejectFrame').onclick = () => { f.status = 'rejected'; f.reviewedAt = new Date().toISOString(); finishReview(); toast('Image rejetée. La décision sera documentée.'); };

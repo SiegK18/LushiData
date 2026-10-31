@@ -4,6 +4,8 @@
 
 > Gemma propose. Vous vérifiez. Chaque dataset conserve ses preuves et ses limites.
 
+![Interface LushiData](docs/preview.png)
+
 ## Le problème
 
 Préparer les données précède tout entraînement de vision. Extraire toutes les images d’une vidéo crée des doublons ; répartir des images voisines entre entraînement et validation donne une évaluation trompeuse. LushiData organise la collecte, le contrôle, l’annotation et la revue. Le cas de démonstration est le tri des déchets ; l’impact auprès d’utilisateurs locaux reste à valider.
@@ -114,6 +116,8 @@ Syntaxe, tests ciblés, build et artefact. Les tests API utilisent des réponses
 ## Contribuer
 
 Voir [CONTRIBUTING.md](CONTRIBUTING.md), [ROADMAP.md](ROADMAP.md) et le [pitch](docs/PITCH.md). Les neuf critères officiels de la grille locale n’ont pas été communiqués ; aucune conformité exhaustive ou note de jury n’est affirmée.
+
+Les [vérifications réalisées](docs/VALIDATION.md) distinguent tests automatisés, parcours navigateur, appel réel à Gemma et limites d’évaluation.
 
 Code : [MIT](LICENSE). Illustrations procédurales : CC0-1.0. Données importées : droits propres.
 
