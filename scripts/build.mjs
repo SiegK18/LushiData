@@ -1,0 +1,15 @@
+import { readFile, mkdir, writeFile, cp } from 'node:fs/promises';
+const read = p => readFile(new URL('../' + p, import.meta.url), 'utf8');
+let html = await read('src/index.html');
+const css = await read('src/styles.css');
+const core = (await read('src/core.js')).replace(/^export /gm, '');
+const app = (await read('src/app.js')).replace(/^import .*?;\s*$/gm, '');
+html = html.replace('/* APP_CSS */', css).replace('/* APP_JS */', () => core + '\n' + app);
+const server = core + '\n' + (await read('src/server.js')).replace(/^import .*?;\s*$/gm, '').replace('const PAGE = "__PAGE__";', () => 'const PAGE = ' + JSON.stringify(html) + ';');
+await mkdir('worker', { recursive: true });
+await mkdir('dist/server', { recursive: true });
+await mkdir('dist/.openai', { recursive: true });
+await writeFile('worker/index.js', server);
+await writeFile('dist/server/index.js', server);
+await cp('.openai/hosting.json', 'dist/.openai/hosting.json');
+console.log('Built LushiData: self-contained Worker + UI (' + Math.round(server.length / 1024) + ' kB).');

@@ -120,4 +120,3 @@ Code : [MIT](LICENSE). Illustrations procédurales : CC0-1.0. Données importée
 [Documentation Google Gemma hébergé](https://ai.google.dev/gemma/docs/core/gemma_on_gemini_api) · [Images via la Gemini API](https://ai.google.dev/gemini-api/docs/image-understanding)
 
 **Hack Day 2026 · Lubumbashi**
-
