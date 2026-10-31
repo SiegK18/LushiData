@@ -56,6 +56,8 @@ Ouvrir **http://127.0.0.1:4317**. `.env` est ignoré par Git. La clé reste côt
 
 Sans accès à Google, collecte, filtres, annotation manuelle et export restent utilisables. L’application affiche l’échec réel de l’API et ne simule pas Gemma.
 
+Les interruptions réseau et erreurs temporaires Google (408, 429, 500, 502, 503, 504) déclenchent jusqu’à trois tentatives avec attente progressive, dans un budget de 55 secondes. Une erreur d’accès n’est pas répétée et un long délai de quota est respecté. Les réponses indiquent le code Google, le nombre de tentatives et une référence de diagnostic sans révéler la clé. En cas d’échec, relancer l’annotation sans recharger l’onglet conserve les images et les propositions déjà reçues.
+
 ## Export
 
 ```text

@@ -227,8 +227,9 @@ async function runGemma() {
       state.requests++;
       const response = await fetch('/api/annotate', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ classes: state.classes, frames: batch.map(({ id, data }) => ({ id, data })) }), signal: AbortSignal.timeout(70000) });
       const result = await response.json();
+      state.requests += Math.max(0, (result.provenance?.upstream_requests || result.attempts || 1) - 1);
+      state.gemmaMs += result.provenance?.elapsed_ms || result.elapsed_ms || 0;
       if (!response.ok) throw new Error(result.error || 'Annotation indisponible.');
-      state.gemmaMs += result.provenance.elapsed_ms;
       for (const annotation of result.annotations) {
         const f = batch.find(f => f.id === annotation.id); if (!f) throw new Error('Identifiant inattendu dans la réponse.');
         f.prediction = { ...annotation, ...result.provenance }; f.label = annotation.label;

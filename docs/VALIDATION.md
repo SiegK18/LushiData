@@ -4,7 +4,9 @@ Ces observations décrivent le prototype. Elles ne constituent pas un benchmark 
 
 ## Vérifications automatisées
 
-`npm run check` : 14 tests ciblés réussis, vérification de syntaxe, build et Worker ESM valides. Les tests API unitaires utilisent des réponses contrôlées et ne consomment aucune clé.
+`npm run check` : 18 tests ciblés réussis, vérification de syntaxe, build et Worker ESM valides. Les tests API unitaires utilisent des réponses contrôlées et ne consomment aucune clé.
+
+Les tests de résilience vérifient la récupération après des erreurs Google 503 et 500, l’arrêt après trois tentatives, le respect d’un long délai de quota et la gestion des interruptions réseau. Aucun échec n’est remplacé par des annotations inventées.
 
 Les tests couvrent notamment le filtrage du flou et de la similarité, les composantes connexes de sources, l’absence de validation artificielle avec une seule source, les annotations exportables, les en-têtes ZIP/CRC, les identifiants de réponses Gemma et le masquage des erreurs sensibles.
 
@@ -19,6 +21,8 @@ Un fichier WebM généré pour le test a également été importé, décodé et 
 L’API Google a répondu avec le modèle `gemma-4-26b-a4b-it`. Six illustrations ont reçu des propositions réelles en deux lots. Trois bouteilles illustrées ont été marquées indéterminées, deux illustrations de canettes ont reçu « métal » et une de carton « papier-carton ». L’ambiguïté est donc effectivement conservée, puis soumise à la revue humaine.
 
 Il ne s’agit pas d’une mesure de précision : illustrations synthétiques, échantillon minuscule et aucune évaluation indépendante.
+
+Un lot de quatre images extraites de la vidéo réelle publique « Recycling Video » a aussi été envoyé à Gemma avec succès pendant le diagnostic d’un échec intermittent. Cette observation vérifie le chemin vidéo réelle → images → API ; elle n’établit pas une disponibilité permanente du fournisseur.
 
 ## Export vérifié indépendamment
 

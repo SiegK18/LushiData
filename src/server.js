@@ -35,7 +35,7 @@ export function parseAnnotations(text, frames, classes) {
   });
 }
 async function hash(text) { return Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text))), x => x.toString(16).padStart(2, '0')).join(''); }
-export async function annotate(body, env, fetcher = fetch) {
+export async function annotate(body, env, fetcher = fetch, runtime = {}) {
   validateInput(body);
   const key = env.GEMINI_API_KEY;
   if (!key) return json({ error: 'La clé Google AI Studio doit être configurée côté serveur dans GEMINI_API_KEY.', code: 'MISSING_KEY' }, 503);
@@ -45,24 +45,51 @@ export async function annotate(body, env, fetcher = fetch) {
   const parts = [{ text: prompt }];
   for (const f of body.frames) parts.push({ text: 'IMAGE_ID=' + f.id }, { inlineData: { mimeType: 'image/jpeg', data: f.data.split(',')[1] } });
   const start = Date.now();
-  let response;
-  try {
-    response = await fetcher('https://generativelanguage.googleapis.com/v1beta/models/' + MODEL + ':generateContent', {
-      method: 'POST', headers: { 'Content-Type': 'application/json', 'x-goog-api-key': key },
-      body: JSON.stringify({ contents: [{ role: 'user', parts }], generationConfig: { temperature: .1, maxOutputTokens: 2048, thinkingConfig: { thinkingLevel: 'minimal' } } }),
-      signal: AbortSignal.timeout(60000)
-    });
-  } catch { return json({ error: 'Google est injoignable ou le délai de 60 secondes a été dépassé. Tes images restent disponibles pour réessayer.', code: 'UPSTREAM_UNAVAILABLE' }, 504); }
+  const requestId = crypto.randomUUID();
+  const sleep = runtime.sleep || (ms => new Promise(resolve => setTimeout(resolve, ms)));
+  const now = runtime.now || Date.now;
+  const deadline = now() + 55000;
+  const payload = JSON.stringify({ contents: [{ role: 'user', parts }], generationConfig: { temperature: .1, maxOutputTokens: 2048, thinkingConfig: { thinkingLevel: 'minimal' } } });
+  let response, attempts = 0;
+  for (let attempt = 0; attempt < 3 && now() < deadline; attempt++) {
+    attempts++;
+    // Clear any previous HTTP response so a subsequent network failure cannot
+    // accidentally be reported using an earlier status or parsed as success.
+    response = undefined;
+    try {
+      response = await fetcher('https://generativelanguage.googleapis.com/v1beta/models/' + MODEL + ':generateContent', {
+        method: 'POST', headers: { 'Content-Type': 'application/json', 'x-goog-api-key': key }, body: payload,
+        signal: AbortSignal.timeout(Math.max(1, Math.min(17000, deadline - now())))
+      });
+    } catch { /* Network interruptions are retried within the same bounded budget. */ }
+    if (response?.ok) break;
+    if (response && ![408, 429, 500, 502, 503, 504].includes(response.status)) break;
+    if (attempt === 2) break;
+    const retryAfter = Number(response?.headers.get('retry-after'));
+    // A long quota cooldown is not a transient retry within this request.
+    if (Number.isFinite(retryAfter) && retryAfter > 5) break;
+    const delay = Math.max(attempt === 0 ? 600 : 1400, Number.isFinite(retryAfter) ? Math.max(0, retryAfter * 1000) : 0);
+    if (now() + delay >= deadline) break;
+    try { await response?.body?.cancel(); } catch { /* Nothing sensitive is logged. */ }
+    await sleep(delay);
+  }
+  const diagnostic = { request_id: requestId, attempts, elapsed_ms: Date.now() - start };
+  if (!response) {
+    console.warn(JSON.stringify({ event: 'gemma_unreachable', request_id: requestId, attempts }));
+    return json({ error: 'Google reste injoignable après ' + attempts + ' tentative(s). Tes images sont conservées : clique à nouveau sur « Annoter avec Gemma » sans recharger la page.', code: 'UPSTREAM_UNAVAILABLE', retryable: true, ...diagnostic }, 504);
+  }
   if (!response.ok) {
     // Never forward upstream text: it can contain credential or request details.
-    const errors = { 400: 'Google refuse la requête. Vérifie que la clé et le modèle sont disponibles pour ce projet Google.', 401: 'Clé Google invalide ou expirée.', 403: 'Accès refusé : vérifie la clé, ses restrictions et l’accès au modèle.', 404: 'Le modèle Gemma demandé n’est pas accessible avec ce projet Google.', 429: 'Quota Google atteint. Attends puis réessaie avec moins d’images.' };
-    return json({ error: errors[response.status] || 'Le service Google a rencontré une erreur. Réessaie plus tard.', code: 'GOOGLE_' + response.status }, response.status === 429 ? 429 : 502);
+    const errors = { 400: 'Google refuse la requête. Vérifie que la clé et le modèle sont disponibles pour ce projet Google.', 401: 'Clé Google invalide ou expirée.', 403: 'Accès refusé : vérifie la clé, ses restrictions et l’accès au modèle.', 404: 'Le modèle Gemma demandé n’est pas accessible avec ce projet Google.', 429: 'Quota Google atteint. Attends avant de relancer l’annotation.', 500: 'Google rencontre une erreur interne sur Gemma.', 502: 'La passerelle Google est temporairement indisponible.', 503: 'Gemma est momentanément surchargé chez Google.', 504: 'Google n’a pas répondu dans le délai prévu.', 408: 'Google a interrompu la requête avant de répondre.' };
+    const retryable = [408, 429, 500, 502, 503, 504].includes(response.status);
+    console.warn(JSON.stringify({ event: 'gemma_http_error', google_status: response.status, request_id: requestId, attempts }));
+    return json({ error: (errors[response.status] || 'Google a refusé l’annotation.') + ' (Google ' + response.status + ', ' + attempts + ' tentative(s).) Tes images sont conservées.', code: 'GOOGLE_' + response.status, upstream_status: response.status, retryable, ...diagnostic }, response.status === 429 ? 429 : 502);
   }
   try {
     const data = await response.json();
     const text = data.candidates?.[0]?.content?.parts?.filter(p => !p.thought).map(p => p.text || '').join('') || '';
     const annotations = parseAnnotations(text, body.frames, body.classes);
-    return json({ annotations, provenance: { model: MODEL, prompt_version: PROMPT_VERSION, prompt_sha256: await hash(prompt), annotated_at: new Date().toISOString(), request_id: crypto.randomUUID(), elapsed_ms: Date.now() - start, usage: data.usageMetadata || null } });
+    return json({ annotations, provenance: { model: MODEL, prompt_version: PROMPT_VERSION, prompt_sha256: await hash(prompt), annotated_at: new Date().toISOString(), request_id: requestId, elapsed_ms: Date.now() - start, upstream_requests: attempts, recovered_after_retry: attempts > 1, usage: data.usageMetadata || null } });
   } catch { return json({ error: 'Réponse Gemma non exploitable. Aucune proposition artificielle n’a été ajoutée ; réessaie le lot.', code: 'INVALID_MODEL_OUTPUT' }, 502); }
 }
 export default {
