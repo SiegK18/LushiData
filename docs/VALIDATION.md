@@ -16,6 +16,8 @@ Chromium de test : collecte synthétique de 14 images, dont huit filtrées et si
 
 Un fichier WebM généré pour le test a également été importé, décodé et échantillonné. La webcam physique et tous les codecs MOV/MP4 ne sont pas couverts par ce test.
 
+Après l’amélioration de l’interface, le parcours a été revérifié sur des largeurs de 360, 390, 768, 1280 et 1440 pixels : pas de débordement horizontal et boutons visibles d’au moins 44 px de hauteur. La validation enchaînée, l’erreur de catégorie vide, l’autorisation avant activation de Gemma et l’export ont été exercés. Les réponses de modèle de ce test UX sont contrôlées ; les appels réels sont documentés séparément ci-dessous.
+
 ## Appel réel à Gemma
 
 L’API Google a répondu avec le modèle `gemma-4-26b-a4b-it`. Six illustrations ont reçu des propositions réelles en deux lots. Trois bouteilles illustrées ont été marquées indéterminées, deux illustrations de canettes ont reçu « métal » et une de carton « papier-carton ». L’ambiguïté est donc effectivement conservée, puis soumise à la revue humaine.

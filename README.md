@@ -19,6 +19,7 @@ Préparer les données précède tout entraînement de vision. Extraire toutes l
 - Annotation réelle par **`gemma-4-26b-a4b-it`** via l’API Google. Aucun téléchargement des poids ni remplacement silencieux de modèle.
 - Catégories configurables, réponse JSON vérifiée côté serveur et ambiguïtés signalées.
 - Correction et validation **image par image** ; aucune validation automatique.
+- Parcours guidé, boutons de taille modérée adaptés au tactile, erreurs de catégorie visibles et action **Valider et suivante** pour enchaîner la revue.
 - ZIP avec arborescence ImageFolder, CSV/JSONL, sources, prompts exacts et SHA-256.
 - Séparation par vidéo source ; les sources reliées par des images proches restent dans la même partition.
 - Passeport : classes, sources, décisions, temps API, acceptation des propositions et limites.

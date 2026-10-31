@@ -8,20 +8,26 @@ let state = fresh(), busy = false, currentView = 'collect', filter = 'all', acti
 function toast(text, error = false) { $('toast').textContent = text; $('toast').className = 'toast' + (error ? ' error' : ''); $('toast').hidden = false; clearTimeout(toastTimer); toastTimer = setTimeout(() => $('toast').hidden = true, error ? 9000 : 5000); }
 function setBusy(value) {
   busy = value;
-  for (const id of ['importBtn', 'cameraBtn', 'demoBtn', 'annotateBtn', 'resetBtn', 'exportBtn']) $(id).disabled = value;
+  for (const id of ['importBtn', 'quickImportBtn', 'cameraBtn', 'demoBtn', 'annotateBtn', 'resetBtn', 'exportBtn']) $(id).disabled = value;
   $('videoInput').disabled = value;
   renderMetrics();
 }
 function showView(view) {
   currentView = view;
   for (const name of ['collect', 'review', 'export']) $(name + 'View').hidden = name !== view;
-  for (const button of document.querySelectorAll('[data-view]')) button.classList.toggle('active', button.dataset.view === view);
+  for (const button of document.querySelectorAll('[data-view]')) {
+    const selected = button.dataset.view === view;
+    button.classList.toggle('active', selected);
+    if (selected) button.setAttribute('aria-current', 'step'); else button.removeAttribute('aria-current');
+  }
   const titles = { collect: ['De la vidéo aux<br>données <span>utiles.</span>', 'Gemma propose. Vous vérifiez.<br>Votre prochain modèle commence ici.'], review: ['Des propositions.<br>Votre <span>validation.</span>', 'Une catégorie n’est jamais une certitude.<br>Votre regard transforme une proposition en annotation.'], export: ['Des données.<br>Et leurs <span>preuves.</span>', 'Chaque image a une source, chaque décision une trace.<br>Exportez un dataset dont vous connaissez les limites.'] };
   $('pageTitle').innerHTML = titles[view][0] + '<svg viewBox="0 0 72 24" aria-hidden="true"><path d="M3 16Q34 1 68 9M8 22Q38 10 62 15"/></svg>';
   $('pageSubtitle').innerHTML = titles[view][1];
   $('breadcrumb').textContent = state.frames.length ? state.name : 'Nouveau dataset';
   if (view === 'review') renderFrames();
   if (view === 'export') renderPassport();
+  renderMetrics();
+  $('workflowGuide').scrollIntoView({ block: 'start' });
 }
 function renderMetrics() {
   const approved = state.frames.filter(f => f.status === 'approved').length;
@@ -34,12 +40,32 @@ function renderMetrics() {
   $('statReview').textContent = pending ? pending + ' image' + (pending > 1 ? 's' : '') + ' à vérifier' : 'Chaque validation est une décision';
   $('statReady').textContent = approved ? approved + ' image' + (approved > 1 ? 's' : '') + ' validée' + (approved > 1 ? 's' : '') + ' dans le ZIP' : 'Validez votre première image';
   $('navPending').textContent = pending;
-  $('annotateCount').textContent = state.frames.filter(f => f.status === 'pending' && !f.prediction).length || '';
+  const remaining = state.frames.filter(f => f.status === 'pending' && !f.prediction).length;
+  $('annotateBtn').innerHTML = (busy ? '<span class="spinner" aria-hidden="true"></span> Traitement en cours' : '✦ Annoter avec Gemma') + '<span id="annotateCount">' + (!busy && remaining ? remaining : '') + '</span>';
+  $('annotateBtn').disabled = busy || !remaining || !$('consentInput').checked;
+  $('annotateBtn').setAttribute('aria-busy', String(busy));
   $('exportBtn').disabled = busy || !approved;
   for (const s of ['all', 'pending', 'approved', 'filtered', 'rejected']) $('count' + s[0].toUpperCase() + s.slice(1)).textContent = s === 'all' ? state.frames.length : state.frames.filter(f => f.status === s).length;
   const locked = !!state.frames.length || busy;
   for (const id of ['classesInput', 'intervalInput', 'thresholdInput']) $(id).disabled = locked;
   $('classChips').innerHTML = state.classes.map(c => '<span class="chip">' + esc(c) + '</span>').join('');
+  $('classHelp').textContent = state.frames.length ? 'Ces réglages sont fixés pour ce dataset. Commencez un nouveau dataset pour les modifier.' : 'Séparez les catégories par des virgules. Une catégorie finale par image.';
+  $('nextReviewBtn').disabled = busy || !state.frames.length;
+  $('nextReviewHint').textContent = state.frames.length ? state.frames.length + ' images extraites · ' + pending + ' à vérifier. Passez à l’étape suivante.' : 'Ajoutez une vidéo pour commencer.';
+  $('reviewNextBtn').hidden = !pending;
+  $('reviewNextBtn').disabled = busy;
+  $('reviewSummary').textContent = approved + ' validée(s) · ' + pending + ' à vérifier. Ouvrez une image pour décider.';
+  $('reviewFinish').hidden = !approved;
+  $('consentHelp').textContent = !remaining ? 'Toutes les images disponibles ont une proposition, ou attendent une décision humaine.' : $('consentInput').checked ? remaining + ' image(s) prête(s) à envoyer à Gemma. Les propositions resteront à vérifier.' : 'Cochez l’autorisation pour activer Gemma. Vous pouvez aussi vérifier les images manuellement.';
+  renderGuidance({ approved, pending, remaining });
+}
+function renderGuidance({ approved, pending, remaining }) {
+  const content = currentView === 'collect'
+    ? state.frames.length ? ['1', 'Vos images sont collectées', 'Passez à « Vérifier » pour demander les propositions de Gemma, puis prendre vos décisions.'] : ['1', 'Ajoutez votre première vidéo', 'Importez un fichier ou ouvrez la webcam. Pour découvrir le parcours, essayez l’exemple synthétique.']
+    : currentView === 'review'
+      ? !state.frames.length ? ['2', 'Commencez par collecter des images', 'Revenez à « Collecter » pour importer une vidéo ou essayer l’exemple.'] : remaining ? ['2', 'Demandez des propositions, puis vérifiez-les', 'Autorisez l’envoi à Google, lancez Gemma et ouvrez chaque image. Les cas indéterminés doivent être examinés.'] : pending ? ['2', pending + ' image(s) attendent votre décision', 'Choisissez la catégorie finale. « Valider et suivante » permet de continuer sans rouvrir les cartes.'] : ['2', 'La revue est terminée', 'Les images validées sont prêtes pour le passeport et l’export. Les images rejetées restent documentées.']
+      : approved ? ['3', approved + ' image(s) validée(s) dans votre export', 'Lisez les limites, indiquez les droits des images puis téléchargez le ZIP avec ses annotations.'] : ['3', 'Validez une image pour activer l’export', 'Retournez à « Vérifier », ouvrez une image et confirmez sa catégorie. Le rapport qualité reste téléchargeable.'];
+  $('guideStep').textContent = content[0]; $('workflowTitle').textContent = content[1]; $('workflowDescription').textContent = content[2];
 }
 function renderSources() {
   $('sourceList').innerHTML = state.sources.map(s => '<div class="source-row"><span class="source-icon">' + (s.synthetic ? '✧' : s.type === 'webcam' ? '◎' : '▷') + '</span><div><strong>' + esc(s.name) + '</strong><small>' + (s.synthetic ? 'Illustration synthétique' : s.type === 'webcam' ? 'Capture webcam' : 'SHA-256 ' + esc(s.sha256.slice(0, 12)) + '…') + ' · ' + fmt(s.duration) + ' s</small></div><span>' + state.frames.filter(f => f.sourceId === s.id).length + ' images</span></div>').join('');
@@ -52,21 +78,64 @@ function renderFrames() {
   $('frameGrid').innerHTML = frames.map(f => '<article class="frame-card ' + f.status + '" data-frame="' + esc(f.id) + '" tabindex="0" role="button" aria-label="Vérifier ' + esc(f.id) + '"><img loading="lazy" src="' + f.data + '" alt="Image extraite à ' + fmt(f.time) + ' secondes"><div class="frame-card-body"><div><span class="frame-label">' + esc(f.label || 'Sans proposition') + '</span><span class="status-tag ' + f.status + '">' + (f.status === 'filtered' ? esc(f.filterReason) : statusName[f.status]) + '</span></div><p class="frame-reason">' + esc(f.prediction?.reason || (f.status === 'filtered' ? 'Filtre indicatif : vous pouvez récupérer cette image.' : 'Lancez Gemma ou attribuez une catégorie vous-même.')) + '</p><div class="frame-meta"><span>' + esc(f.sourceId.slice(0, 8)) + ' · ' + fmt(f.time) + ' s</span><span>Netteté ' + fmt(f.sharpness) + '</span></div></div><div class="card-action"><span>' + (f.status === 'approved' ? 'Revoir la décision' : 'Ouvrir & vérifier') + '</span><span>↗</span></div></article>').join('');
   for (const card of $('frameGrid').querySelectorAll('[data-frame]')) { card.onclick = () => openFrame(card.dataset.frame); card.onkeydown = e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openFrame(card.dataset.frame); } }; }
 }
+
 function openFrame(id) {
   if (busy) return toast('Attends la fin du traitement avant de modifier les images.');
-  const f = state.frames.find(f => f.id === id); if (!f) return;
+  const f = state.frames.find(frame => frame.id === id); if (!f) return;
   activeFrame = id; reviewOpened = performance.now();
-  const source = state.sources.find(s => s.id === f.sourceId);
-  $('frameDetail').innerHTML = '<div class="detail-layout"><div><img class="detail-image" src="' + f.data + '" alt="Image à vérifier"><div class="evidence-row"><span>Source</span><span>' + esc(source?.name) + '</span></div><div class="evidence-row"><span>Position</span><span>' + fmt(f.time) + ' s</span></div><div class="evidence-row"><span>Netteté / luminosité</span><span>' + fmt(f.sharpness) + ' / ' + f.brightness + '</span></div><div class="evidence-row"><span>SHA-256 image</span><span title="' + f.sha256 + '">' + f.sha256.slice(0, 20) + '…</span></div></div><div class="detail-info"><span class="eyebrow">REVUE HUMAINE</span><h2>Votre décision compte.</h2><span class="status-tag ' + f.status + '">' + statusName[f.status] + '</span>' + (f.prediction ? '<p><strong>Proposition de Gemma : ' + esc(f.prediction.label) + '</strong><br>' + esc(f.prediction.reason) + '</p>' + (f.prediction.uncertain ? '<p class="detail-help">Gemma signale une ambiguïté. Inspectez l’image avant de décider.</p>' : '') : '<p>Aucune proposition de modèle pour cette image. Une annotation manuelle reste possible.</p>') + (f.filterReason ? '<p class="detail-help">Filtre initial : ' + esc(f.filterReason) + '. Récupérer cette image sera consigné dans le rapport.</p>' : '') + '<label for="labelSelect">Catégorie finale</label><select id="labelSelect"><option value="">Choisir une catégorie…</option>' + state.classes.map(c => '<option value="' + esc(c) + '"' + (f.label === c ? ' selected' : '') + '>' + esc(c) + '</option>').join('') + '</select><div class="detail-actions">' + (f.status === 'filtered' ? '<button class="btn btn-primary" id="restoreFrame">Récupérer pour revue</button>' : '<button class="btn btn-primary" id="approveFrame">✓ Valider l’image</button>') + '<button class="btn btn-white" id="rejectFrame">Rejeter</button></div><p class="keyboard-hint">Valider enregistre la catégorie et la date de votre décision.</p></div></div>';
+  const index = state.frames.indexOf(f), source = state.sources.find(s => s.id === f.sourceId);
+  $('frameDetail').innerHTML =
+    '<div class="detail-nav"><span>Image ' + (index + 1) + ' sur ' + state.frames.length + '</span><div class="detail-nav-actions">' +
+    '<button id="previousFrame" aria-label="Image précédente" title="Image précédente"' + (index === 0 ? ' disabled' : '') + '>←</button>' +
+    '<button id="nextFrame" aria-label="Image suivante" title="Image suivante"' + (index === state.frames.length - 1 ? ' disabled' : '') + '>→</button></div></div>' +
+    '<div class="detail-layout"><div><img class="detail-image" src="' + f.data + '" alt="Image à vérifier"><details class="frame-provenance"><summary>Source et contrôles qualité</summary>' +
+    '<div class="evidence-row"><span>Source</span><span>' + esc(source?.name) + '</span></div>' +
+    '<div class="evidence-row"><span>Position</span><span>' + fmt(f.time) + ' s</span></div>' +
+    '<div class="evidence-row"><span>Netteté / luminosité</span><span>' + fmt(f.sharpness) + ' / ' + f.brightness + '</span></div>' +
+    '<div class="evidence-row"><span>SHA-256 image</span><span title="' + f.sha256 + '">' + f.sha256.slice(0, 20) + '…</span></div></details></div>' +
+    '<div class="detail-info"><span class="eyebrow">REVUE HUMAINE</span><h2>Choisissez la catégorie finale</h2>' +
+    '<span class="status-tag ' + f.status + '">' + statusName[f.status] + '</span>' +
+    (f.prediction ? '<p><strong>Gemma propose : ' + esc(f.prediction.label) + '</strong><br>' + esc(f.prediction.reason) + '</p>' +
+      (f.prediction.uncertain ? '<p class="detail-help">Gemma hésite. Identifiez le matériau si vous le pouvez ; sinon, rejetez cette image.</p>' : '') :
+      '<p>Vous pouvez attribuer une catégorie vous-même, ou fermer cette fenêtre pour demander une proposition à Gemma.</p>') +
+    (f.filterReason ? '<p class="detail-help">Filtre initial : ' + esc(f.filterReason) + '. Toute récupération sera documentée.</p>' : '') +
+    '<label for="labelSelect">Catégorie finale</label><select id="labelSelect" aria-describedby="labelError"><option value="">Choisir une catégorie…</option>' +
+    state.classes.map(c => '<option value="' + esc(c) + '"' + (f.label === c ? ' selected' : '') + '>' + esc(c) + '</option>').join('') +
+    '</select><p id="labelError" class="field-error" role="alert" hidden></p>' +
+    '<div class="detail-actions">' +
+    (f.status === 'filtered' ? '<button class="btn btn-primary advance-button" id="restoreFrame">Récupérer pour vérification</button>' :
+      '<button class="btn btn-primary advance-button" id="approveNextFrame">✓ Valider et suivante →</button><button class="btn btn-white" id="approveFrame">Valider et fermer</button>') +
+    '<button class="btn btn-white" id="rejectFrame">Rejeter l’image</button></div>' +
+    '<p class="keyboard-hint">Seules les images que vous validez seront exportées.</p></div></div>';
   if (!$('frameDialog').open) $('frameDialog').showModal();
-  if ($('approveFrame')) $('approveFrame').onclick = () => {
-    const label = $('labelSelect').value; if (!state.classes.includes(label)) return toast('Choisis une catégorie valide avant de confirmer.', true);
-    f.label = label; f.status = 'approved'; f.qualityOverride = !!f.filterReason; f.reviewedAt = new Date().toISOString(); finishReview(); toast('Image validée et ajoutée au futur export.');
+  $('frameDialog').scrollTop = 0;
+  $('previousFrame').onclick = () => { if (index > 0) openFrame(state.frames[index - 1].id); };
+  $('nextFrame').onclick = () => { if (index < state.frames.length - 1) openFrame(state.frames[index + 1].id); };
+  $('labelSelect').onchange = () => { $('labelError').hidden = true; $('labelSelect').removeAttribute('aria-invalid'); };
+  const approve = advance => {
+    const label = $('labelSelect').value;
+    if (!state.classes.includes(label)) {
+      $('labelError').textContent = 'Choisissez une catégorie, ou rejetez l’image si elle reste ambiguë.';
+      $('labelError').hidden = false; $('labelSelect').setAttribute('aria-invalid', 'true'); $('labelSelect').focus(); return;
+    }
+    f.label = label; f.status = 'approved'; f.qualityOverride = !!f.filterReason; f.reviewedAt = new Date().toISOString();
+    finishReview(advance); toast('Image validée. Elle sera incluse dans le dataset.');
   };
+  if ($('approveFrame')) $('approveFrame').onclick = () => approve(false);
+  if ($('approveNextFrame')) $('approveNextFrame').onclick = () => approve(true);
   if ($('restoreFrame')) $('restoreFrame').onclick = () => { f.status = 'pending'; f.qualityOverride = true; finishReview(); toast('Image récupérée. Elle reste à annoter et à valider.'); };
   $('rejectFrame').onclick = () => { f.status = 'rejected'; f.reviewedAt = new Date().toISOString(); finishReview(); toast('Image rejetée. La décision sera documentée.'); };
 }
-function finishReview() { state.reviewMs += Math.round(performance.now() - reviewOpened); $('frameDialog').close(); activeFrame = null; renderFrames(); }
+function finishReview(advance = false) {
+  const index = state.frames.findIndex(f => f.id === activeFrame);
+  state.reviewMs += Math.round(performance.now() - reviewOpened);
+  const ordered = [...state.frames.slice(index + 1), ...state.frames.slice(0, index)];
+  const next = advance ? ordered.find(f => f.status === 'pending') : null;
+  renderFrames();
+  if (next) { openFrame(next.id); return; }
+  $('frameDialog').close(); activeFrame = null;
+  if (advance && !state.frames.some(f => f.status === 'pending')) toast('Revue terminée. Consultez le passeport pour exporter.');
+}
 function syncSettings() {
   const classes = $('classesInput').value.split(',').map(s => s.trim()).filter(Boolean);
   const slugs = classes.map(safeSlug);
@@ -290,13 +359,15 @@ async function exportDataset() {
   finally { setBusy(false); renderPassport(); }
 }
 for (const button of document.querySelectorAll('[data-view]')) button.onclick = () => showView(button.dataset.view);
-for (const button of document.querySelectorAll('[data-filter]')) button.onclick = () => { filter = button.dataset.filter; document.querySelectorAll('[data-filter]').forEach(b => b.classList.toggle('active', b === button)); renderFrames(); };
-$('importBtn').onclick = () => $('videoInput').click(); $('videoInput').onchange = e => importFiles([...e.target.files]);
+for (const button of document.querySelectorAll('[data-filter]')) button.onclick = () => { filter = button.dataset.filter; document.querySelectorAll('[data-filter]').forEach(b => { b.classList.toggle('active', b === button); b.setAttribute('aria-pressed', String(b === button)); }); renderFrames(); };
+$('importBtn').onclick = $('quickImportBtn').onclick = () => $('videoInput').click(); $('videoInput').onchange = e => importFiles([...e.target.files]);
 $('dropZone').ondragover = e => { e.preventDefault(); $('dropZone').classList.add('drag-over'); };
 $('dropZone').ondragleave = () => $('dropZone').classList.remove('drag-over');
 $('dropZone').ondrop = e => { e.preventDefault(); $('dropZone').classList.remove('drag-over'); importFiles([...e.dataTransfer.files]); };
 $('cameraBtn').onclick = startCamera; $('recordBtn').onclick = captureCamera; $('closeCameraBtn').onclick = () => { if (!cameraCapturing) stopCamera(); };
 $('demoBtn').onclick = loadDemo; $('annotateBtn').onclick = runGemma; $('exportBtn').onclick = exportDataset;
+$('consentInput').onchange = renderMetrics;
+$('reviewNextBtn').onclick = () => { const next = state.frames.find(f => f.status === 'pending'); if (next) openFrame(next.id); };
 $('datasetName').oninput = () => { state.name = $('datasetName').value.trim() || 'Mon dataset'; $('breadcrumb').textContent = state.name; };
 $('classesInput').oninput = () => { try { syncSettings(); renderMetrics(); } catch { $('classChips').textContent = 'Définissez 2 à 8 catégories distinctes.'; } };
 $('intervalInput').oninput = e => { state.interval = +e.target.value; $('intervalOutput').textContent = '1 image / ' + state.interval + ' s'; };
